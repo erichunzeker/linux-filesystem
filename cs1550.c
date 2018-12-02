@@ -77,6 +77,62 @@ struct cs1550_disk_block
 
 typedef struct cs1550_disk_block cs1550_disk_block;
 
+void format(const char *path, char *directory, char *filename, char *extension) {
+	directory[0] = '\0';
+	filename[0] = '\0';
+	extension[0] = '\0';
+
+	int error = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+
+	if(error == 0) {
+		fprintf(stderr, "path error\n");
+	}
+
+	directory[MAX_FILENAME] = '\0';
+	filename[MAX_FILENAME] = '\0';
+	extension[MAX_EXTENSION] = '\0';
+	return;
+}
+
+int findDirectory(char *directory, struct cs1550_directory_entry *entry) {
+	FILE *file;
+	int location = -1;
+	file = fopen(".disk", "rb");
+
+	if(!file) {
+		fprintf(stderr, "\n.disk error\n");
+	} else {
+		struct cs1550_root_directory *root = malloc(sizeof(struct cs1550_root_directory));
+
+		if(!fread(root, sizeof(struct cs1550_root_directory), 1, file)) {
+			fprintf(stderr, "\n.disk error\n");
+			fclose(file);
+			return -1;
+		}
+		int i;
+		for(i = 0; i < root->nDirectories; i++) {
+			if(!strcmp(root->directories[i].dname, directory)) {
+				location = root->directories[i].nStartBlock;
+				int offset = location * BLOCK_SIZE;
+				if(fseek(file, offset, SEEK_SET)){
+					fprintf(stderr, "\n.disk error\n");
+					fclose(file);
+					location = -1;
+				} else {
+					if(!fread(entry, sizeof(struct cs1550_directory_entry), 1, file)) {
+						fprintf(stderr, "\n.disk error\n");
+						fclose(file);
+						location = -1;
+					}
+				} break;
+			}
+		}
+	}
+
+	fclose(file);
+	return location;
+}
+
 /*
  * Called whenever the system wants to know the file attributes, including
  * simply whether the file exists or not. 
@@ -86,34 +142,50 @@ typedef struct cs1550_disk_block cs1550_disk_block;
 static int cs1550_getattr(const char *path, struct stat *stbuf)
 {
 	int res = 0;
+	char directory[MAX_FILENAME + 1];
+	char filename[MAX_FILENAME + 1];
+	char extension[MAX_EXTENSION + 1];
+
 
 	memset(stbuf, 0, sizeof(struct stat));
 
-	//is path the root dir?
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
 		stbuf->st_nlink = 2;
 	} else {
+		format(path, filename, directory, extension);
+		struct cs1550_directory_entry *entry = malloc(sizeof(struct cs1550_directory_entry));
+		int location = findDirectory(directory, entry);
+		if(location != -1) {
+			if(strlen(filename) == 0) {
+				stbuf->st_mode = S_IFDIR | 0755;
+				stbuf->st_nlink = 2;
+			} else {
+				int i;
+				int valid = 0;
 
-	//Check if name is subdirectory
-	/* 
-		//Might want to return a structure with these fields
-		stbuf->st_mode = S_IFDIR | 0755;
-		stbuf->st_nlink = 2;
-		res = 0; //no error
-	*/
+				for(i = 0; i < entry->nFiles; i++) {
+					if(!strcmp(entry->files[i].fname, filename)) {
+						valid = 1;
+						break;
+					}
+				}
 
-	//Check if name is a regular file
-	/*
-		//regular file, probably want to be read and write
-		stbuf->st_mode = S_IFREG | 0666; 
-		stbuf->st_nlink = 1; //file links
-		stbuf->st_size = 0; //file size - make sure you replace with real size!
-		res = 0; // no error
-	*/
+				if(valid) {
+					//regular file, probably want to be read and write
+					stbuf->st_mode = S_IFREG | 0666;
+					stbuf->st_nlink = 1; //file links
+					stbuf->st_size = entry->files[i].fsize;
+				} else {
+					res = -ENOENT;
+				}
+			}
+		}
 
-		//Else return that path doesn't exist
-		res = -ENOENT;
+		else {
+			//Else return that path doesn't exist
+			res = -ENOENT;
+		}
 	}
 	return res;
 }
@@ -131,20 +203,46 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 
+	char directory[MAX_FILENAME + 1];
+	char filename[MAX_FILENAME + 1];
+	char extension[MAX_EXTENSION + 1];
+
 	//This line assumes we have no subdirectories, need to change
-	if (strcmp(path, "/") != 0)
-	return -ENOENT;
+	if (strcmp(path, "/") != 0) {
+		filler(buf, ".", NULL, 0);
+		filler(buf, "..", NULL, 0);
 
-	//the filler function allows us to add entries to the listing
-	//read the fuse.h file for a description (in the ../include dir)
-	filler(buf, ".", NULL, 0);
-	filler(buf, "..", NULL, 0);
+		FILE *file;
+		file = fopen(".disk", "rb");
 
-	/*
-	//add the user stuff (subdirs or files)
-	//the +1 skips the leading '/' on the filenames
-	filler(buf, newpath + 1, NULL, 0);
-	*/
+		if(!file) {
+			fprintf(stderr, "\n.disk error\n");
+		} else {
+			struct cs1550_root_directory *root = malloc(sizeof(struct cs1550_root_directory));
+
+			if(!fread(root, sizeof(struct cs1550_root_directory), 1, file)) {
+				fprintf(stderr, "\n.disk error\n");
+				fclose(file);
+				return -ENOENT;
+
+			}
+			int i;
+			for(i = 0; i < root->nDirectories; i++) {
+				filler(buf, root->directories[i].dname, NULL, 0);
+			}
+		}
+		fclose(file);
+	} else {
+		format(path, filename, directory, extension);
+		struct cs1550_directory_entry *entry = malloc(sizeof(struct cs1550_directory_entry));
+		int location = findDirectory(directory, entry);
+		if(location != 1) {
+			filler(buf, ".", NULL, 0);
+			filler(buf, "..", NULL, 0);
+		} else {
+			return -ENOENT;
+		}
+	}
 	return 0;
 }
 
