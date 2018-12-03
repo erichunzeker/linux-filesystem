@@ -239,6 +239,14 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		if(location != 1) {
 			filler(buf, ".", NULL, 0);
 			filler(buf, "..", NULL, 0);
+			int i;
+			for(i = 0; i <entry->nFiles; i++) {
+				char fullName[MAX_FILENAME + MAX_EXTENSION + 2];
+				strcpy(fullName, entry->files[i].fname);
+				strcat(fullName, ".");
+				strcat(fullName, entry->files[i].fext);
+				filler(buf, fullName, NULL, 0);
+			}
 		} else {
 			return -ENOENT;
 		}
@@ -252,8 +260,55 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
  */
 static int cs1550_mkdir(const char *path, mode_t mode)
 {
+
+	/*
+	 * 	0 on success
+	 * 	-ENAMETOOLONG if the name is beyond 8 chars
+	 * 	-EPERM if the directory is not under the root dir only
+	 * 	-EEXIST if the directory already exists
+	 */
 	(void) path;
 	(void) mode;
+
+	char directory[MAX_FILENAME + 1];
+	char filename[MAX_FILENAME + 1];
+	char extension[MAX_EXTENSION + 1];
+
+	format(path, filename, directory, extension);
+
+	struct cs1550_directory_entry *entry = malloc(sizeof(struct cs1550_directory_entry));
+	int location = findDirectory(directory, entry);
+
+	if(strlen(directory) > MAX_FILENAME) {
+		fprintf(stderr, "\ndirectory name too long\n");
+		return -ENAMETOOLONG;
+	} if(strlen(filename)) {
+		fprintf(stderr, "\ncan only create directory under root\n");
+		return -EPERM;
+	} if(location != -1) {
+		return -EEXIST;
+	} else {
+		FILE *f;
+		f = fopen(".disk", "rb+");
+
+		if(!f) {
+			fprintf(stderr, "\n.disk error\n");
+			fclose(file);
+			return -1;
+		}
+
+		struct cs1550_root_directory *root = malloc(sizeof(struct cs1550_root_directory));
+
+		if(!fread(root, sizeof(struct cs1550_root_directory), 1, file)) {
+			fprintf(stderr, "\n.disk error\n");
+			fclose(file);
+			return -1;
+		}
+
+
+
+	}
+
 
 	return 0;
 }
@@ -264,7 +319,8 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 static int cs1550_rmdir(const char *path)
 {
 	(void) path;
-    return 0;
+
+	return 0;
 }
 
 /* 
