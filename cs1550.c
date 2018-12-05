@@ -77,6 +77,12 @@ struct cs1550_disk_block
 
 typedef struct cs1550_disk_block cs1550_disk_block;
 
+#define MAX_FAT (BLOCK_SIZE/sizeof(short))
+
+struct cs_1550_fat {
+    short table[MAX_FAT];
+};
+
 void format(const char *path, char *directory, char *filename, char *extension) {
 	directory[0] = '\0';
 	filename[0] = '\0';
@@ -85,7 +91,7 @@ void format(const char *path, char *directory, char *filename, char *extension) 
 	int error = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 
 	if(error == 0) {
-		fprintf(stderr, "path error\n");
+		printf("path error\n");
 	}
 
 	directory[MAX_FILENAME] = '\0';
@@ -100,12 +106,12 @@ int findDirectory(char *directory, struct cs1550_directory_entry *entry) {
 	file = fopen(".disk", "rb");
 
 	if(!file) {
-		fprintf(stderr, "\n.disk error\n");
+		printf("\n.disk error\n");
 	} else {
 		struct cs1550_root_directory *root = malloc(sizeof(struct cs1550_root_directory));
 
 		if(!fread(root, sizeof(struct cs1550_root_directory), 1, file)) {
-			fprintf(stderr, "\n.disk error\n");
+			printf("\n.disk error\n");
 			fclose(file);
 			return -1;
 		}
@@ -115,12 +121,12 @@ int findDirectory(char *directory, struct cs1550_directory_entry *entry) {
 				location = root->directories[i].nStartBlock;
 				int offset = location * BLOCK_SIZE;
 				if(fseek(file, offset, SEEK_SET)){
-					fprintf(stderr, "\n.disk error\n");
+					printf("\n.disk error\n");
 					fclose(file);
 					location = -1;
 				} else {
 					if(!fread(entry, sizeof(struct cs1550_directory_entry), 1, file)) {
-						fprintf(stderr, "\n.disk error\n");
+						printf("\n.disk error\n");
 						fclose(file);
 						location = -1;
 					}
@@ -132,6 +138,7 @@ int findDirectory(char *directory, struct cs1550_directory_entry *entry) {
 	fclose(file);
 	return location;
 }
+
 
 /*
  * Called whenever the system wants to know the file attributes, including
@@ -216,12 +223,12 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		file = fopen(".disk", "rb");
 
 		if(!file) {
-			fprintf(stderr, "\n.disk error\n");
+			printf("\n.disk error\n");
 		} else {
 			struct cs1550_root_directory *root = malloc(sizeof(struct cs1550_root_directory));
 
 			if(!fread(root, sizeof(struct cs1550_root_directory), 1, file)) {
-				fprintf(stderr, "\n.disk error\n");
+				printf("\n.disk error\n");
 				fclose(file);
 				return -ENOENT;
 
@@ -280,10 +287,10 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 	int location = findDirectory(directory, entry);
 
 	if(strlen(directory) > MAX_FILENAME) {
-		fprintf(stderr, "\ndirectory name too long\n");
+		printf("\ndirectory name too long\n");
 		return -ENAMETOOLONG;
 	} if(strlen(filename)) {
-		fprintf(stderr, "\ncan only create directory under root\n");
+		printf("\ncan only create directory under root\n");
 		return -EPERM;
 	} if(location != -1) {
 		return -EEXIST;
@@ -292,20 +299,94 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 		f = fopen(".disk", "rb+");
 
 		if(!f) {
-			fprintf(stderr, "\n.disk error\n");
-			fclose(file);
+			printf("\n.disk error\n");
+			fclose(f);
 			return -1;
 		}
 
 		struct cs1550_root_directory *root = malloc(sizeof(struct cs1550_root_directory));
 
-		if(!fread(root, sizeof(struct cs1550_root_directory), 1, file)) {
-			fprintf(stderr, "\n.disk error\n");
-			fclose(file);
+		if(!fread(root, sizeof(struct cs1550_root_directory), 1, f)) {
+			printf("\n.disk error\n");
+			fclose(f);
 			return -1;
 		}
 
+		if(root->nDirectories == MAX_DIRS_IN_ROOT) {
+            printf("\nroot directory reached capacity\n");
+            fclose(f);
+            return -EPERM;
+		}
 
+        strcpy(root->directories[root->nDirectories].dname, directory);
+        if(fseek(f, -sizeof(struct cs_1550_fat), SEEK_END)){
+            printf("\nfat error\n");
+            fclose(f);
+            return -1;
+        }
+        struct cs_1550_fat *fat = (struct cs_1550_fat *)malloc(BLOCK_SIZE);
+        if(!fread(fat, sizeof(struct cs_1550_fat), 1, f)){
+            printf("\n.disk error\n");
+            fclose(f);
+            return -1;
+        }
+        if(fat->table[0] == 0){
+            int i;
+            for(i = 0; i < MAX_FAT; i++){
+                fat->table[i] = (short) -1;
+            }
+            fat->table[0] = (short) -2;
+        }
+        int i, free_block = -1;
+        for(i = 0; i < MAX_FAT; i++){
+            if(fat->table[i] == (short) -1){
+                free_block = i;
+                fat->table[i] = (short) -2;
+                break;
+            }
+        }
+        if(free_block == -1){
+            printf("\nno free blocks\n");
+            fclose(f);
+            return -1;
+        }
+
+        root->directories[root->nDirectories].nStartBlock = free_block;
+        fat->table[free_block] = (short) -2;
+        if(fseek(f, -sizeof(struct cs_1550_fat), SEEK_END)){
+            printf("\n.disk error\n");
+            return -1;
+        }
+        if(!fwrite(fat, sizeof(struct cs_1550_fat), 1, f)){
+            printf("\nError on writing FAT back to .disk after update\n");
+            fclose(f);
+            return -1;
+        }
+        int off = free_block * BLOCK_SIZE;
+        if(fseek(f, off, SEEK_SET)){
+            printf("Error on seeking to free block in .disk\n");
+            fclose(f);
+            return -1;
+        }
+        struct cs1550_directory_entry *new_dir = (struct cs1550_directory_entry *)malloc(sizeof(struct cs1550_directory_entry));
+        memset(new_dir, 0, sizeof(struct cs1550_directory_entry));
+        if(!fwrite(new_dir, sizeof(struct cs1550_directory_entry), 1, f)){
+            printf("Failed to write to .disk\n");
+            fclose(f);
+            return -1;
+        }
+        root->nDirectories++;
+        if(fseek(f, 0, SEEK_SET)){
+            printf("\nError on seeking back to root on .disk\n");
+            fclose(f);
+            return -1;
+        }
+        if(!fwrite(root, sizeof(struct cs1550_root_directory), 1, f)){
+            printf("\nError on writing root back to .disk\n");
+            fclose(f);
+            return -1;
+        }
+        fclose(f);
 
 	}
 
@@ -331,7 +412,40 @@ static int cs1550_mknod(const char *path, mode_t mode, dev_t dev)
 {
 	(void) mode;
 	(void) dev;
-	return 0;
+    char directory[MAX_FILENAME + 1];
+    char filename[MAX_FILENAME + 1];
+    char extension[MAX_EXTENSION + 1];
+    format(path, directory, filename, extension);
+
+    if(strlen(filename) > MAX_FILENAME + 1){
+        return -ENAMETOOLONG;
+    } else if(strlen(extension) > MAX_EXTENSION + 1){
+        return -ENAMETOOLONG;
+    }
+    struct cs1550_directory_entry *entry = malloc(sizeof(struct cs1550_directory_entry));
+    int dir = findDirectory(directory, entry);
+    if(dir == -1) {
+        print("\ndirectory doesn't exist");
+        return -EPERM;
+    } else if(entry->nFiles == MAX_FILES_IN_DIR){
+        printf("\ndirectory at max files\n");
+        return -1;
+    }
+    int i;
+    for(i = 0; i < entry->nFiles; i++){
+        if(strcmp(entry->files[i].fname, filename) && strcmp(entry->files[i].fext, extension)){
+            printf("File exists\n");
+            return -EEXIST;
+        }
+    }
+    FILE *file;
+    file = fopen(".disk", "rb+");
+
+
+
+
+
+    return 0;
 }
 
 /*
@@ -378,11 +492,45 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 	(void) offset;
 	(void) fi;
 	(void) path;
+    char directory[MAX_FILENAME + 1];
+    char filename[MAX_FILENAME + 1];
+    char extension[MAX_EXTENSION + 1];
+    format(path, directory, filename, extension);
 
-	//check to make sure path exists
+
+    //check to make sure path exists
+    struct cs1550_directory_entry *entry = malloc(sizeof(struct cs1550_directory_entry));
+    int location = findDirectory(directory, entry);
+    if(location == -1){
+        printf("\npath doesn't exist\n");
+        return 0;
+    }
 	//check that size is > 0
+	size_t size = 0;
+    int found_index = -1;
+    int found_location = -1;
+    int i = 0;
+    for(i = 0; i < entry->nFiles; i++) {
+        if(!strcmp(filename, entry->files[i].fname) && !strcmp(extension, entry->files[i].fext)) {
+            found_index = i;
+            found_location = entry->files[i].nStartBlock;
+            size = entry->files[i].fsize;
+            break;
+        }
+    }
+
+    if(size <= 0 || found_index == -1) {
+        printf("\nfile size must be nonzero");
+
+    }
 	//check that offset is <= to the file size
+
+	if(offset > size) {
+        printf("\noffest can't be larger than file size");
+	    return -EFBIG;
+	}
 	//write data
+
 	//set size (should be same as input) and return, or error
 
 	return size;
