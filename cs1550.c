@@ -79,11 +79,11 @@ struct cs_1550_fat {
 };
 
 void format(const char *path, char *directory, char *filename, char *extension) {
-    directory[0] = '\0';
+    directory[0] = '\0'; //put terminators before and after string in char array
     filename[0] = '\0';
     extension[0] = '\0';
 
-    int error = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+    int error = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension); //regex from proj description
 
     if (error == 0) {
         printf("path error\n");
@@ -112,7 +112,7 @@ int findDirectory(char *directory, struct cs1550_directory_entry *entry) {
         }
         int i;
         for (i = 0; i < root->nDirectories; i++) {
-            if (!strcmp(root->directories[i].dname, directory)) {
+            if (!strcmp(root->directories[i].dname, directory)) { //directory at array of root's directories matches the new root
                 location = root->directories[i].nStartBlock;
                 int offset = location * BLOCK_SIZE;
                 if (fseek(file, offset, SEEK_SET)) {
@@ -357,7 +357,7 @@ static int cs1550_mkdir(const char *path, mode_t mode) {
         }
         int off = free_block * BLOCK_SIZE;
         if (fseek(f, off, SEEK_SET)) {
-            printf("Error on seeking to free block in .disk\n");
+            printf("error freeing block on .disk\n");
             fclose(f);
             return -1;
         }
@@ -365,18 +365,18 @@ static int cs1550_mkdir(const char *path, mode_t mode) {
                 sizeof(struct cs1550_directory_entry));
         memset(new_dir, 0, sizeof(struct cs1550_directory_entry));
         if (!fwrite(new_dir, sizeof(struct cs1550_directory_entry), 1, f)) {
-            printf("Failed to write to .disk\n");
+            printf("error writing to .disk\n");
             fclose(f);
             return -1;
         }
         root->nDirectories++;
         if (fseek(f, 0, SEEK_SET)) {
-            printf("\nError on seeking back to root on .disk\n");
+            printf("\nerror seeking root on .disk\n");
             fclose(f);
             return -1;
         }
         if (!fwrite(root, sizeof(struct cs1550_root_directory), 1, f)) {
-            printf("\nError on writing root back to .disk\n");
+            printf("\nerror writing root to .disk\n");
             fclose(f);
             return -1;
         }
@@ -717,34 +717,34 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
     //set size (should be same as input) and return, or error
 
     struct cs_1550_fat *fat = malloc(sizeof(struct cs_1550_fat));
-    if(fseek(file, -sizeof(struct cs_1550_fat), SEEK_END)){
-        printf("\nError on seeking to FAT on .disk\n");
+    if (fseek(file, -sizeof(struct cs_1550_fat), SEEK_END)) {
+        printf("\nerror seeking fat on .disk\n");
         fclose(file);
         return 0;
     }
-    if(!fread(fat, sizeof(struct cs_1550_fat), 1, file)){
-        printf("\nError on reading FAT from .disk\n");
+    if (!fread(fat, sizeof(struct cs_1550_fat), 1, file)) {
+        printf("\nerror reading fat on .disk\n");
         fclose(file);
         return 0;
     }
     int real_offset = offset;
-    while(real_offset > BLOCK_SIZE){
+    while (real_offset > BLOCK_SIZE) {
         real_offset -= BLOCK_SIZE;
-        if(fat->table[found_location] == -2){
+        if (fat->table[found_location] == -2) {
             break;
         }
         found_location = fat->table[found_location];
     }
     int off = found_location * BLOCK_SIZE;
-    if(fseek(file, off, SEEK_SET)){
-        printf("\nError on seeking to file location on .disk\n");
+    if (fseek(file, off, SEEK_SET)) {
+        printf("\nerror seeking file location on .disk\n");
         fclose(file);
         return 0;
     }
     int num_blocks = 1;
-    if((offset + size) > BLOCK_SIZE){
+    if ((offset + size) > BLOCK_SIZE) {
         num_blocks = (offset + size) / BLOCK_SIZE;
-        if(((offset + size) % BLOCK_SIZE) > 0){
+        if (((offset + size) % BLOCK_SIZE) > 0) {
             num_blocks++;
         }
     }
@@ -752,21 +752,21 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
     int blocks_written = 0;
     int bytes_written = 0;
     int bytes_remaining = size;
-    while(blocks_written < num_blocks){
+    while (blocks_written < num_blocks) {
         int write_size = MAX_DATA_IN_BLOCK;
-        if(bytes_remaining < MAX_DATA_IN_BLOCK){
+        if (bytes_remaining < MAX_DATA_IN_BLOCK) {
             write_size = bytes_remaining;
         }
-        if(!fread(block->data, MAX_DATA_IN_BLOCK, 1, file)){
-            printf("\nError on reading block to write from .disk\n");
+        if (!fread(block->data, MAX_DATA_IN_BLOCK, 1, file)) {
+            printf("\nerorr reading block from .disk\n");
             fclose(file);
             return 0;
         }
-        if(blocks_written == 0){
-            if((write_size + offset) > MAX_DATA_IN_BLOCK){
+        if (blocks_written == 0) {
+            if ((write_size + offset) > MAX_DATA_IN_BLOCK) {
                 write_size = MAX_DATA_IN_BLOCK - offset;
             }
-        }else{
+        } else {
             real_offset = 0;
         }
         block->data[real_offset] = 0;
@@ -775,70 +775,68 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
         bytes_written += write_size;
         bytes_remaining -= write_size;
         off = found_location * BLOCK_SIZE;
-        if(fseek(file, off, SEEK_SET)){
-            printf("Error on seeking to beginning of current block\n");
+        if (fseek(file, off, SEEK_SET)) {
+            printf("error seeking beginning of block\n");
             return 0;
         }
-        if(!fwrite(block->data, BLOCK_SIZE, 1, file)){
-            printf("\nError on writing block back to .disk\n");
+        if (!fwrite(block->data, BLOCK_SIZE, 1, file)) {
+            printf("\nerror writing .disk\n");
             return 0;
         }
-        if(bytes_remaining){
-            if(fat->table[found_location] != -2){
+        if (bytes_remaining) {
+            if (fat->table[found_location] != -2) {
                 found_location = fat->table[found_location];
-            }else{
+            } else {
                 int free_block = -1;
-                for(i = 0; i < MAX_FAT; i++){
-                    if(fat->table[i] == (short)-1){
+                for (i = 0; i < MAX_FAT; i++) {
+                    if (fat->table[i] == (short) -1) {
                         free_block = i;
                         fat->table[found_location] = i;
-                        fat->table[i] = (short)-2;
+                        fat->table[i] = (short) -2;
                         break;
                     }
                 }
-                if(free_block == -1){
-                    printf("\nDisk full. Could not complete write\n");
+                if (free_block == -1) {
+                    printf("\ndisk full\n");
                     fclose(file);
                     return bytes_written;
                 }
-                if(fseek(file, -sizeof(struct cs_1550_fat), SEEK_END)){
-                    printf("\nError on seeking to FAT location on .disk\n");
+                if (fseek(file, -sizeof(struct cs_1550_fat), SEEK_END)) {
+                    printf("\neroor seeking fat on .disk\n");
                     fclose(file);
                     return 0;
                 }
-                if(!fwrite(fat, sizeof(struct cs_1550_fat), 1, file)){
-                    printf("\nError on writing FAT back to .disk\n");
+                if (!fwrite(fat, sizeof(struct cs_1550_fat), 1, file)) {
+                    printf("\nerror writing fat to .disk\n");
                     fclose(file);
                     return 0;
                 }
                 found_location = free_block;
             }
             off = found_location * BLOCK_SIZE;
-            if(fseek(file, off, SEEK_SET)){
-                printf("\nError on seeking to next block to write\n");
+            if (fseek(file, off, SEEK_SET)) {
+                printf("\nwrite erorr\n");
                 return bytes_written;
             }
-        }
-        else{
+        } else {
             break;
         }
         blocks_written++;
     }
-    if((offset + size) > file_size){
+    if ((offset + size) > file_size) {
         entry->files[found_index].fsize += (offset + size) - file_size;
-    }
-    else if((offset + size) < file_size){
+    } else if ((offset + size) < file_size) {
         entry->files[found_index].fsize = offset + size;
     }
-    if(file_size != entry->files[found_index].fsize){
+    if (file_size != entry->files[found_index].fsize) {
         off = location * BLOCK_SIZE;
-        if(fseek(file, off, SEEK_SET)){
-            printf("\nError on seeking to directory location on .disk\n");
+        if (fseek(file, off, SEEK_SET)) {
+            printf("\nerror finding directory on .disk\n");
             fclose(file);
             return 0;
         }
-        if(!fwrite(entry, sizeof(struct cs1550_directory_entry), 1, file)){
-            printf("\nError on writing updated directory to .disk\n");
+        if (!fwrite(entry, sizeof(struct cs1550_directory_entry), 1, file)) {
+            printf("\nerror writing directory to .disk\n");
             fclose(file);
             return 0;
         }
